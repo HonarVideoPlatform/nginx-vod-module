@@ -74,7 +74,21 @@ without the overhead of short segments for the whole duration of the video
 
 * Tested on Linux only
 
-### Installation
+### Compilation
+
+#### Dependencies
+
+In general, if you have the dependencies that are required to build nginx, you should be able to build nginx-vod-module.
+However, some optional features of this module depend on additional packages. The module detects these packages 
+during `configure` - if a package is missing, the respective feature will be disabled.
+
+The optional features are:
+1. Thumbnail capture - depends on ffmpeg (3.0 or newer)
+2. Audio filtering (for changing playback rate / gain) - depends on ffmpeg (3.0 or newer) and also on libfdk_aac.
+	Due to licensing issues, libfdk_aac is not built into kaltura ffmpeg packages
+3. Encryption / decryption (DRM / HLS AES) - depends on openssl
+4. DFXP captions - depends on libxml2
+5. UTF-16 encoded SRT files - depends on iconv
 
 #### Build
 
@@ -88,34 +102,19 @@ To compile as a dynamic module (nginx 1.9.11+), use:
   
 	./configure --add-dynamic-module=/path/to/nginx-vod-module
 
-In this case, the `load_module` directive should be used in nginx.conf to load the module.
+In this case, the `load_module` directive should be used in nginx.conf in order to load the module.
 
-For asynchronous I/O support add `--with-file-aio` (highly recommended, local and mapped modes only)
+Optional recommended settings:
+1. `--with-file-aio` - enable asynchronous I/O support, highly recommended, relevant only to local and mapped modes
+2. `--with-threads` (nginx 1.7.11+) - enable asynchronous file open using thread pool (also requires `vod_open_file_thread_pool` in nginx.conf), relevant only to local and mapped modes
+3. `--with-cc-opt="-O3"` - enable additional compiler optimizations (we saw about 8% reduction in the mp4 parse time
+	and frame processing time compared to the nginx default `-O`)
 
-    ./configure --add-module=/path/to/nginx-vod-module --with-file-aio
+Debug settings:
+1. `--with-debug` - enable debug messages (also requires passing `debug` in the `error_log` directive in nginx.conf).
+2. `--with-cc-opt="-O0"` - disable compiler optimizations (for debugging with gdb)
 
-For asynchronous file open using thread pool add `--with-threads` (nginx 1.7.11+, local and mapped modes only)
-
-    ./configure --add-module=/path/to/nginx-vod-module --with-threads
-
-We recommend setting the gcc optimization parameter `-O3` - we got about 8% reduction in the mp4 parse time
-and frame processing time compared to the nginx default `-O`
-
-    ./configure --add-module=/path/to/nginx-vod-module --with-cc-opt="-O3"
-	
-To compile nginx with debug messages add `--with-debug`
-
-    ./configure --add-module=/path/to/nginx-vod-module --with-debug
-
-To disable compiler optimizations (for debugging with gdb) add `--with-cc-opt="-O0"`
-
-    ./configure --add-module=/path/to/nginx-vod-module --with-cc-opt="-O0"
-
-If you wish to make use of the following features:
-- Thumbnail capture
-- Playback rate change - 0.5x up to 2x
-
-Please also make sure you have the ffmpeg (>= 3.1) libs and headers in your the build ENV.
+### Installation
 
 #### RHEL/CentOS RPM
 If you are using RHEL or CentOS 6, you can install by setting up the repo:
@@ -162,7 +161,7 @@ Where:
   * mapped mode - the full file path is determined according to the JSON received from the upstream / local file
   * remote mode - the mp4 file is read from upstream in chunks
   * Note: in mapped & remote modes, the URL of the upstream request is `http://<upstream>/<location>/<fileuri>?<extraargs>`
-  (extraargs is determined by the vod_upstream_extra_args parameter)
+  (extraargs is determined by the `vod_upstream_extra_args` parameter)
 * filename - detailed below
 
 #### Multi URL structure
@@ -178,7 +177,11 @@ The sample URL above represents 3 URLs:
 * `http://<domain>/<location>/<prefix><middle2><postfix>/<filename>`
 * `http://<domain>/<location>/<prefix><middle3><postfix>/<filename>`
 
-The suffix `.urlset` (can be changed with vod_multi_uri_suffix) indicates that the URL should be treated as a multi URL.
+The suffix `.urlset` (can be changed using `vod_multi_uri_suffix`) indicates that the URL should be treated as a multi URL.
+For example - the URL `http://example.com/hls/videos/big_buck_bunny_,6,9,15,00k.mp4.urlset/master.m3u8` will return a manifest containing:
+* http://example.com/hls/videos/big_buck_bunny_600k.mp4/index.m3u8
+* http://example.com/hls/videos/big_buck_bunny_900k.mp4/index.m3u8
+* http://example.com/hls/videos/big_buck_bunny_1500k.mp4/index.m3u8
 
 #### URL path parameters
 
@@ -669,8 +672,8 @@ A more scalable architecture would be to use proxy servers or a CDN in order to 
 
 In order to perform the encryption, nginx-vod-module needs several parameters, including key & key_id, these parameters
 are fetched from an external server via HTTP GET requests.
-The vod_drm_upstream_location parameter specifies an nginx location that is used to access the DRM server,
-and the request uri is configured using vod_drm_request_uri (this parameter can include nginx variables). 
+The `vod_drm_upstream_location` parameter specifies an nginx location that is used to access the DRM server,
+and the request uri is configured using `vod_drm_request_uri` (this parameter can include nginx variables). 
 The response of the DRM server is a JSON, with the following format:
 
 ```
@@ -732,23 +735,23 @@ Following is a list of configurations that were tested and found working:
 	In general, it's best to have nginx vod as close as possible to where the mp4 files are stored, 
 	and have the caching proxies as close as possible to the end users.
 2. Enable nginx-vod-module caches:
-	* vod_metadata_cache - saves the need to re-read the video metadata for each segment. This cache should be rather large, in the order of GBs.
-	* vod_response_cache - saves the responses of manifest requests. This cache may not be required when using a second layer of caching servers before nginx vod. 
+	* `vod_metadata_cache` - saves the need to re-read the video metadata for each segment. This cache should be rather large, in the order of GBs.
+	* `vod_response_cache` - saves the responses of manifest requests. This cache may not be required when using a second layer of caching servers before nginx vod. 
 		No need to allocate a large buffer for this cache, 128M is probably more than enough for most deployments.
-	* vod_mapping_cache - for mapped mode only, few MBs is usually enough.
+	* `vod_mapping_cache` - for mapped mode only, few MBs is usually enough.
 	* nginx's open_file_cache - caches open file handles.
 
-	The hit/miss ratios of these caches can be tracked by enabling performance counters (vod_performance_counters) 
-	and setting up a status page for nginx vod (vod_status)
+	The hit/miss ratios of these caches can be tracked by enabling performance counters (`vod_performance_counters`)
+	and setting up a status page for nginx vod (`vod_status`)
 3. In local & mapped modes, enable aio. - nginx has to be compiled with aio support, and it has to be enabled in nginx conf (aio on). 
 	You can verify it works by looking at the performance counters on the vod status page - read_file (aio off) vs. async_read_file (aio on)
-4. In local & mapped modes, enable asynchronous file open - nginx has to be compiled with threads support, and vod_open_file_thread_pool 
+4. In local & mapped modes, enable asynchronous file open - nginx has to be compiled with threads support, and `vod_open_file_thread_pool`
 	has to be specified in nginx.conf. You can verify it works by looking at the performance counters on the vod status page - 
 	open_file vs. async_open_file
-5. When using DRM enabled DASH/MSS, if the video files have a single nalu per frame, set vod_min_single_nalu_per_frame_segment to non-zero.
+5. When using DRM enabled DASH/MSS, if the video files have a single nalu per frame, set `vod_min_single_nalu_per_frame_segment` to non-zero.
 6. The muxing overhead of the streams generated by this module can be reduced by changing the following parameters:
-	* HDS - set vod_hds_generate_moof_atom to off
-	* HLS - set vod_hls_align_frames to off and vod_hls_interleave_frames to on
+	* HDS - set `vod_hds_generate_moof_atom` to off
+	* HLS - set `vod_hls_align_frames` to off and `vod_hls_interleave_frames` to on
 7. Enable gzip compression on manifest responses - 
 
 	`gzip_types application/vnd.apple.mpegurl video/f4m application/dash+xml text/xml`
@@ -830,7 +833,7 @@ the overhead of short segments throughout the video.
 * **context**: `http`, `server`, `location`
 
 When enabled, the module forces all segments to start with a key frame. Enabling this setting can lead to differences
-between the actual segment durations and the durations reported in the manifest (unless vod_manifest_segment_durations_mode is set to accurate).
+between the actual segment durations and the durations reported in the manifest (unless `vod_manifest_segment_durations_mode` is set to accurate).
 
 #### vod_segment_count_policy
 * **syntax**: `vod_segment_count_policy last_short/last_long/last_rounded`
@@ -857,11 +860,11 @@ Configures the policy for calculating the duration of a manifest containing mult
 * **context**: `http`, `server`, `location`
 
 Configures the calculation mode of segment durations within manifest requests:
-* estimate - reports the duration as configured in nginx.conf, e.g. if vod_segment_duration has the value 10000,
+* estimate - reports the duration as configured in nginx.conf, e.g. if `vod_segment_duration` has the value 10000,
 an HLS manifest will contain #EXTINF:10
 * accurate - reports the exact duration of the segment, taking into account the frame durations, e.g. for a 
 frame rate of 29.97 and 10 second segments it will report the first segment as 10.01. accurate mode also
-takes into account the key frame alignment, in case vod_align_segments_to_key_frames is on
+takes into account the key frame alignment, in case `vod_align_segments_to_key_frames` is on
 
 ### Configuration directives - upstream
 
@@ -901,7 +904,7 @@ The parameter value can contain variables.
 * **context**: `http`, `server`, `location`
 
 Sets the uri of media set mapping requests, the parameter value can contain variables.
-In case of multi url, $vod_suburi will be the current sub uri (a separate request is issued per sub URL)
+In case of multi url, `$vod_suburi` will be the current sub uri (a separate request is issued per sub URL)
 
 #### vod_path_response_prefix
 * **syntax**: `vod_path_response_prefix prefix`
@@ -1271,7 +1274,7 @@ Configures the size and shared memory object name of the drm info cache.
 * **context**: `http`, `server`, `location`
 
 Sets the uri of drm info requests, the parameter value can contain variables.
-In case of multi url, $vod_suburi will be the current sub uri (a separate drm info request is issued per sub URL)
+In case of multi url, `$vod_suburi` will be the current sub uri (a separate drm info request is issued per sub URL)
 
 #### vod_min_single_nalu_per_frame_segment
 * **syntax**: `vod_min_single_nalu_per_frame_segment index`
